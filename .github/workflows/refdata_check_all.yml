@@ -1,0 +1,45 @@
+name: refdata_check_all
+on:
+  workflow_dispatch:
+    inputs:
+      checkAll:
+        description: 'Check all'
+        required: true
+        type: choice
+        options:
+          - all
+jobs:
+  check-key-duplicates:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # Upload branch name as artifact for use in following workflow
+      - name: Save branch name
+        env:
+          BRANCH_NAME: ${{ github.ref }}
+        run: |
+          mkdir -p ./branch_name
+          echo $BRANCH_NAME > ./branch_name/current_name.txt
+      - uses: actions/upload-artifact@v3
+        with:
+          name: triggering_branch_name
+          path: branch_name/current_name.txt
+
+      - name: Run python checkfile on map
+        if: ${{ github.event.inputs.checkAll == 'map' || 'all' }}
+        working-directory: ./src
+        run: python multi_csv_index.py -c 6 ../map/**.csv
+
+      - name: Run python checkfile on lookup
+        if: ${{ github.event.inputs.checkAll == 'lookup' || 'all' }}
+        working-directory: ./src
+        run: python multi_csv_index.py -c 4 ../lookup/**.csv

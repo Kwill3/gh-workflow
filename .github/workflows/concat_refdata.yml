@@ -1,0 +1,73 @@
+name: concat_refdata
+on:
+  workflow_run:
+    workflows: [refdata_quality_check, refdata_check_all]
+    types: [completed]
+jobs:
+  concatenate_refdata:
+    runs-on: ubuntu-latest
+    name: Concatenate mappings and lookups
+    steps:
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      # Load triggering branch name (if any) as an artifact
+      - name: Load branch name
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: ${{ github.event.workflow_run.workflow_id }}
+          workflow_conclusion: success
+          name: triggering_branch_name
+      
+      - name: Assign branch name to variable
+        id: output_branch_name
+        run: |
+          input_file="current_name.txt"
+          while read line
+          do
+            file_text=$line
+          done < "$input_file"
+          echo ::set-output name=branch_name::$file_text
+
+      - name: Checkout repo content
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ steps.output_branch_name.outputs.branch_name }}
+          fetch-depth: 0
+
+      # Run concatenation on MAP files and push output file into repo
+      - name: Run concatenation on mapping file(s)
+        working-directory: ./src
+        run: |
+          python concat_rd.py -o ../refdata_deploy/ref_map_loader.csv -t map ../map/**_MAP.csv
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add ../refdata_deploy/ref_map_loader.csv
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Github Actions auto-generated concatenation"
+          else
+            echo "No changes to commit for map";
+          fi
+
+      # Run concatenation on LKP files and push output file into repo
+      - name: Run concatenation on lookup file(s)
+        working-directory: ./src
+        run: |
+          python concat_rd.py -o ../refdata_deploy/ref_lookup_loader.csv -t lookup ../lookup/**_LKP.csv
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add ../refdata_deploy/ref_lookup_loader.csv
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Github Actions auto-generated concatenation"
+          else
+            echo "No changes to commit for lookup";
+          fi
+      
+      # Push the committed changes to the branch that triggered the workflow
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          force_with_lease: true
+          

@@ -1,0 +1,134 @@
+name: On PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      forceappdispatch:
+        description: "Force specific job dispatch for job"
+        type: choice
+        options:
+          - terraform
+          - refdata-check
+  pull_request:
+
+jobs:
+  # check what has changed
+  filters:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Filter
+        uses: dorny/paths-filter@v2
+        id: filters
+        with:
+          filters: |
+            terraform:
+              - 'infra/**'
+            refdata:
+              - 'map/**'
+              - 'lookup/**'
+    outputs:
+      terraform: ${{ steps.filters.outputs.terraform == 'true' && inputs.forceappdispatch == null }}
+      refdata: ${{ steps.filters.outputs.refdata == 'true' && inputs.forceappdispatch == null }}
+
+  check-key-duplicates:
+    needs: filters
+    if: needs.filters.outputs.refdata == 'true' || inputs.forceappdispatch == 'refdata-check'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Get all changed MAP file(s)
+        id: changed-map-files
+        uses: tj-actions/changed-files@v35
+        with:
+          files: |
+            **/**_MAP.csv
+
+      - name: Get all changed LOOKUP file(s)
+        id: changed-lookup-files
+        uses: tj-actions/changed-files@v35
+        with:
+          files: |
+            **/**_LKP.csv
+
+      # Data Quality check on maps
+      - name: Run checkfile on changed MAP files
+        id: map-checkfile
+        if: steps.changed-map-files.outputs.any_changed == 'true'
+        run: |
+          echo "List of map files checked for duplicates: ${{ steps.changed-map-files.outputs.all_changed_files }}"
+          python src/multi_csv_index.py -c 6 ${{ steps.changed-map-files.outputs.all_changed_files }}
+    
+      # Run concatenation on MAP files and push output file into repo
+      - name: Run concatenation on mapping file(s)
+        if: steps.map-checkfile.outcome == 'success'
+        working-directory: ./src
+        run: |
+          python concat_rd.py -o ../refdata_deploy/ref_map_loader.csv -t map ../map/**_MAP.csv
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add ../refdata_deploy/ref_map_loader.csv
+          git commit -m "Github Actions auto-generated concatenation"
+
+      # Data Quality check on lookups
+      - name: Run checkfile on changed LOOKUP files
+        id: lookup-checkfile
+        if: steps.changed-lookup-files.outputs.any_changed == 'true'
+        run: |
+          echo "List of lookup files checked for duplicates: ${{ steps.changed-lookup-files.outputs.all_changed_files }}"
+          python src/multi_csv_index.py -c 4 ${{ steps.changed-lookup-files.outputs.all_changed_files }}
+
+      # Run concatenation on LKP files and push output file into repo
+      - name: Run concatenation on lookup file(s)
+        if: steps.lookup-checkfile.outcome == 'success'
+        working-directory: ./src
+        run: |
+          python concat_rd.py -o ../refdata_deploy/ref_lookup_loader.csv -t lookup ../lookup/**_LKP.csv
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add ../refdata_deploy/ref_lookup_loader.csv
+          git commit -m "Github Actions auto-generated concatenation"
+
+  terraform-plan-dev:
+    needs: filters
+    if: needs.filters.outputs.terraform == 'true' || inputs.forceappdispatch == 'terraform'
+    uses: github-actions-library/.github/workflows/terraform.yml@main
+    with:
+      infra_dir_path: infra/
+      target_env_name: dev
+      aws_role_arn: "arn:aws:iam::3333333333333:role/github"
+      terraform_apply: false
+      vault_role_id: 33333333333333333
+      terraform_version: 1.3.7
+    secrets:
+      github_app_id: ${{ secrets.GITHUB_APP_ID }}
+      github_app_private_key: ${{ secrets.GITHUB_PRIVATE_KEY }}
+      team_github_app_id: ${{ secrets.TEAM_GIT_APP_ID }}
+      team_github_app_private_key: ${{ secrets.TEAM_GIT_APP_PRIVATE_KEY }}
+      teams_webhook: ${{ secrets.TEAMS_WEBHOOK }}
+      vault_secret_id: ${{ secrets.VAULT_SECRET_ID }}
+
+  final-validate:
+    # Make sure to include all jobs
+    needs:
+      - check-key-duplicates
+      - terraform-plan-dev
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: martialonline/workflow-status@v3
+        id: check
+      - name: fail the workflow checked job
+        if: steps.check.outputs.status == 'failure'
+        run: exit 1

@@ -1,0 +1,58 @@
+name: refdata_quality_check
+on:
+  pull_request:
+    paths:
+      - '**/map/**.csv'
+      - '**/lookup/**.csv'
+jobs:
+  check-key-duplicates:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # Upload branch name as artifact for use in following workflow
+      - name: Save branch name
+        env:
+          BRANCH_NAME: ${{ github.head_ref }}
+        run: |
+          mkdir -p ./branch_name
+          echo $BRANCH_NAME > ./branch_name/current_name.txt
+      - uses: actions/upload-artifact@v3
+        with:
+          name: triggering_branch_name
+          path: branch_name/current_name.txt
+    
+
+      - name: Get all changed MAP file(s)
+        id: changed-map-files
+        uses: tj-actions/changed-files@v35
+        with:
+          files: |
+            **/**_MAP.csv
+
+      - name: Get all changed LOOKUP file(s)
+        id: changed-lookup-files
+        uses: tj-actions/changed-files@v35
+        with:
+          files: |
+            **/**_LKP.csv
+
+      - name: Run checkfile on changed MAP files
+        if: steps.changed-map-files.outputs.any_changed == 'true'
+        run: |
+          echo "List of map files checked for duplicates: ${{ steps.changed-map-files.outputs.all_changed_files }}"
+          python src/multi_csv_index.py -c 6 ${{ steps.changed-map-files.outputs.all_changed_files }}
+
+      - name: Run checkfile on changed LOOKUP files
+        if: steps.changed-lookup-files.outputs.any_changed == 'true'
+        run: |
+          echo "List of lookup files checked for duplicates: ${{ steps.changed-lookup-files.outputs.all_changed_files }}"
+          python src/multi_csv_index.py -c 4 ${{ steps.changed-lookup-files.outputs.all_changed_files }}
