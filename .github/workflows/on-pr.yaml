@@ -33,6 +33,7 @@ jobs:
       terraform: ${{ steps.filters.outputs.terraform == 'true' && inputs.forceappdispatch == null }}
       refdata: ${{ steps.filters.outputs.refdata == 'true' && inputs.forceappdispatch == null }}
 
+  # For changes in refdata folders, run data quality check and auto concatenation
   check-key-duplicates:
     needs: filters
     if: needs.filters.outputs.refdata == 'true' || inputs.forceappdispatch == 'refdata-check'
@@ -46,6 +47,7 @@ jobs:
 
       - uses: actions/checkout@v3
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
       - name: Get all changed MAP file(s)
@@ -62,6 +64,11 @@ jobs:
           files: |
             **/**_LKP.csv
 
+      - name: Git configuration
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+
       # Data Quality check on maps
       - name: Run checkfile on changed MAP files
         id: map-checkfile
@@ -76,11 +83,13 @@ jobs:
         working-directory: ./src
         run: |
           python concat_rd.py -o ../refdata_deploy/ref_map_loader.csv -t map ../map/**_MAP.csv
-          git config user.name github-actions
-          git config user.email github-actions@github.com
           git add ../refdata_deploy/ref_map_loader.csv
-          git commit -m "Github Actions auto-generated concatenation"
-
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "${{ github.ref_name }}: Auto-generated ref_map_loader"
+          else
+            echo "No changes to commit for map";
+          fi
+        
       # Data Quality check on lookups
       - name: Run checkfile on changed LOOKUP files
         id: lookup-checkfile
@@ -95,11 +104,20 @@ jobs:
         working-directory: ./src
         run: |
           python concat_rd.py -o ../refdata_deploy/ref_lookup_loader.csv -t lookup ../lookup/**_LKP.csv
-          git config user.name github-actions
-          git config user.email github-actions@github.com
           git add ../refdata_deploy/ref_lookup_loader.csv
-          git commit -m "Github Actions auto-generated concatenation"
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "${{ github.ref_name }}: Auto-generated ref_lookup_loader"
+          else
+            echo "No changes to commit for lookup";
+          fi
+      
+      # Push the committed changes
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          force_with_lease: true
 
+  # For changes in terraform folders
   terraform-plan-dev:
     needs: filters
     if: needs.filters.outputs.terraform == 'true' || inputs.forceappdispatch == 'terraform'
